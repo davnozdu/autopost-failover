@@ -1,0 +1,52 @@
+name: Watchdog (домашний сервер autopost)
+
+# Ежечасная проверка живости домашнего сервера. При подтверждённом отключении
+# (Этап 4) поднимется резервный сервер на Hetzner; при возвращении (Этап 5) —
+# погасится. Сейчас (Этап 3) — только детект + уведомление.
+#
+# Живёт в ОТДЕЛЬНОМ ПУБЛИЧНОМ репозитории → минуты Actions бесплатны/безлимитны,
+# исходники autopost не раскрываются, а адрес дома лежит в секрете HOME_HEALTH_URL.
+
+on:
+  schedule:
+    - cron: "5 * * * *"      # каждый час в :05 (UTC); GitHub может задержать на 5–15 мин
+  workflow_dispatch:          # ручной запуск для теста
+    inputs:
+      retries:
+        description: "Доп. попыток после первого провала"
+        default: "3"
+      retry_interval:
+        description: "Пауза между попытками, сек"
+        default: "600"
+
+concurrency:
+  group: watchdog             # не запускать два сторожа одновременно
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45       # с запасом на 3 паузы по 10 мин
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить домашний сервер
+        id: check
+        env:
+          HOME_HEALTH_URL: ${{ secrets.HOME_HEALTH_URL }}
+          RETRIES: ${{ github.event.inputs.retries || '3' }}
+          RETRY_INTERVAL: ${{ github.event.inputs.retry_interval || '600' }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: bash scripts/watchdog.sh
+
+      - name: Состояние
+        run: echo "home_state=${{ steps.check.outputs.home_state }}"
+
+      # --- Этап 4/5 (заглушки, подключим на следующих шагах) ---
+      # - name: Поднять резерв на Hetzner
+      #   if: steps.check.outputs.home_state == 'HOME_DOWN'
+      #   run: bash scripts/provision.sh
+      # - name: Погасить резерв и вернуться на домашний
+      #   if: steps.check.outputs.home_state == 'HOME_UP'
+      #   run: bash scripts/teardown.sh
