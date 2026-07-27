@@ -98,13 +98,14 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # ── 2. Образ ОС ───────────────────────────────────────────────────────────
-# Предпочитаем marketplace-образ с предустановленным Docker; иначе чистая Ubuntu
-# (cloud-init поставит Docker сам).
-os_image=$(do_api GET "/images?type=application&per_page=200" \
-  | jq -r '[.images[] | select(.slug != null) | select(.slug | test("^docker-")) | .slug] | .[0] // empty')
+# Берём СВЕЖУЮ Ubuntu и ставим Docker сами (~1 мин при старте). Marketplace-образ
+# «docker-*» у DO собран на Ubuntu 20.04, которая уже без обновлений безопасности,
+# а сервер торчит в интернет — экономия минуты того не стоит. Переопределяется
+# переменной OS_IMAGE.
+os_image="${OS_IMAGE:-}"
 if [ -z "$os_image" ]; then
   os_image=$(do_api GET "/images?type=distribution&per_page=200" \
-    | jq -r '[.images[] | select(.slug != null) | .slug]
+    | jq -r '[.images[] | select(.slug != null) | select(.slug | endswith("-x64")) | .slug]
              | (map(select(. == "ubuntu-24-04-x64")) + map(select(startswith("ubuntu-24")))
                 + map(select(startswith("ubuntu-22")))) | .[0] // empty')
 fi
