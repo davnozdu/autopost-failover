@@ -117,6 +117,21 @@ if [ "$DRY_RUN" = "1" ]; then
     | unique_by([.name,.loc]) | sort_by(.hourly)
     | map(select(.arch != "x86" or .memory < 2))
     | .[:8][] | "  \(.name)\t\(.arch)\t\(.cores) vCPU, \(.memory) ГБ\t\(.loc)\t€\(.hourly|tostring[:7])/ч  ← \(if .arch != "x86" then "ARM: образ autopost только amd64" else "мало памяти" end)"')"
+  # Линейка cx (Intel, самая дешёвая) — где она вообще поддерживается и где
+  # реально доступна к созданию: «поддерживается, но распродано» выглядит в
+  # консоли Hetzner как существующий тариф, а API его к созданию не отдаёт.
+  summary "$(printf '\nЛинейка cx (Intel) по ЦОДам — supported / available:')"
+  summary "$(jq -n --argjson t "$types_json" --argjson d "$dcs_json" -r '
+    ([$t.server_types[] | select(.name | startswith("cx")) | {id:.id, name:.name,
+       arch:.architecture, dep:.deprecated, cores:.cores, memory:.memory, disk:.disk,
+       price:([.prices[]?.price_hourly.gross | tonumber] | min)}]) as $cx |
+    if ($cx | length) == 0 then "  линейки cx в API нет вообще"
+    else
+      ($cx[] | "  \(.name): \(.cores) vCPU, \(.memory) ГБ, \(.disk) ГБ, arch=\(.arch), deprecated=\(.dep), от €\(.price|tostring[:7])/ч"),
+      ($d.datacenters[] | . as $dc | ($cx[] |
+        select(($dc.server_types.supported // []) | index(.id)) |
+        "  \($dc.name): \(.name) — \(if (($dc.server_types.available // []) | index(.id)) then "ДОСТУПЕН" else "поддерживается, но НЕ доступен (распродан)" end)"))
+    end')"
   # Первичный IPv4 тарифицируется ОТДЕЛЬНО от сервера — показываем и его.
   summary "$(hc GET "/pricing" | jq -r '.pricing |
     "\nПервичный IPv4: €\(.primary_ips[]? | select(.type=="ipv4") | .prices[0].price_hourly.gross|tostring[:8])/ч",
