@@ -34,6 +34,10 @@ on:
         description: "При гашении: всё проверить, но сервер не удалять"
         type: boolean
         default: false
+      force_home_restore:
+        description: "Везти базу домой даже если на резерве нет ничего новее (репетиция)"
+        type: boolean
+        default: false
 
 concurrency:
   group: watchdog             # не запускать два сторожа одновременно
@@ -115,6 +119,7 @@ jobs:
           PORT: ${{ vars.PORT || '8778' }}
           KEEP_SERVER: ${{ github.event.inputs.keep_server == 'true' && '1' || '0' }}
           SKIP_HOME_RESTORE: ${{ vars.SKIP_HOME_RESTORE || '0' }}
+          FORCE_HOME_RESTORE: ${{ github.event.inputs.force_home_restore == 'true' && '1' || '0' }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: bash scripts/teardown.sh

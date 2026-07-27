@@ -203,20 +203,30 @@ home_base="${HOME_HEALTH_URL%/}"; home_base="${home_base%/health}"
 # откатятся. Сверяем по последней публикации: везём базу домой, только если на
 # резерве публикации СВЕЖЕЕ домашних.
 api_get() { curl -fsS --max-time 30 -H "Authorization: Bearer ${API_KEY:-}" "${1}${2}"; }
+b_st=$(api_get "$backup_base" "/api/status" 2>/dev/null)
+h_st=$(api_get "$home_base"   "/api/status" 2>/dev/null)
+b_pub=$(jq -r '.last_published // empty' <<<"$b_st" 2>/dev/null)
+h_pub=$(jq -r '.last_published // empty' <<<"$h_st" 2>/dev/null)
+b_art=$(jq -r '.articles // 0' <<<"$b_st" 2>/dev/null); b_art=${b_art:-0}
+h_art=$(jq -r '.articles // 0' <<<"$h_st" 2>/dev/null); h_art=${h_art:-0}
 newer_on_backup="unknown"
-b_pub=$(api_get "$backup_base" "/api/status" | jq -r '.last_published // empty' 2>/dev/null)
-h_pub=$(api_get "$home_base"   "/api/status" | jq -r '.last_published // empty' 2>/dev/null)
-if [ -n "$b_pub" ] || [ -n "$h_pub" ]; then
-  log "Последняя публикация: резерв=${b_pub:-нет}, дом=${h_pub:-нет}"
-  # ISO-8601 в UTC сравним лексикографически; пустая строка = «публикаций нет»
-  if [ -z "$b_pub" ]; then newer_on_backup="no"
-  elif [ -z "$h_pub" ]; then newer_on_backup="yes"
-  elif [[ "$b_pub" > "$h_pub" ]]; then newer_on_backup="yes"
+if [ -n "$b_st" ] || [ -n "$h_st" ]; then
+  log "Резерв: статей ${b_art}, последняя публикация ${b_pub:-нет}"
+  log "Дом:    статей ${h_art}, последняя публикация ${h_pub:-нет}"
+  # ISO-8601 в UTC сравним лексикографически. Дом ВПЕРЕДИ по публикациям — значит
+  # он всё это время работал, и его базу трогать нельзя. Иначе везём домой, если у
+  # резерва свежее публикации ИЛИ больше статей (собранное, но ещё не опубликованное
+  # тоже жалко терять). Всё совпало — везти нечего.
+  if [ -n "$h_pub" ] && [ -n "$b_pub" ] && [[ "$h_pub" > "$b_pub" ]]; then
+    newer_on_backup="no"
+  elif [ -n "$b_pub" ] && [ -z "$h_pub" ]; then newer_on_backup="yes"
+  elif [ -n "$b_pub" ] && [ -n "$h_pub" ] && [[ "$b_pub" > "$h_pub" ]]; then newer_on_backup="yes"
+  elif [ "$b_art" -gt "$h_art" ] 2>/dev/null; then newer_on_backup="yes"
   else newer_on_backup="no"; fi
 fi
 
 if [ "$newer_on_backup" = "no" ] && [ "${FORCE_HOME_RESTORE:-0}" != "1" ]; then
-  log "На резерве нет публикаций новее домашних — базу домой НЕ везу (иначе откат)."
+  log "На резерве нет ничего новее домашнего — базу домой НЕ везу (иначе откат)."
   summary "ℹ️ Резерв ничего нового не опубликовал: домашняя база остаётся своей, дроплет удаляю."
 elif [ "${SKIP_HOME_RESTORE:-0}" = "1" ] || [ -z "${HOME_HEALTH_URL:-}" ]; then
   log "Восстановление дома пропущено (SKIP_HOME_RESTORE)."
