@@ -1,8 +1,8 @@
 name: Watchdog (домашний сервер autopost)
 
 # Ежечасная проверка живости домашнего сервера. При подтверждённом отключении
-# (Этап 4) поднимется резервный сервер на Hetzner; при возвращении (Этап 5) —
-# погасится. Сейчас (Этап 3) — только детект + уведомление.
+# поднимается резервный сервер на Hetzner (Этап 4); при возвращении дома он
+# гасится (Этап 5, ещё не подключён — пока удаляем вручную).
 #
 # Живёт в ОТДЕЛЬНОМ ПУБЛИЧНОМ репозитории → минуты Actions бесплатны/безлимитны,
 # исходники autopost не раскрываются, а адрес дома лежит в секрете HOME_HEALTH_URL.
@@ -18,6 +18,14 @@ on:
       retry_interval:
         description: "Пауза между попытками, сек"
         default: "600"
+      force_provision:
+        description: "Поднять резерв, не проверяя дом (тест)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Только показать выбранный тариф и цену, ничего не создавать"
+        type: boolean
+        default: false
 
 concurrency:
   group: watchdog             # не запускать два сторожа одновременно
@@ -26,12 +34,13 @@ concurrency:
 jobs:
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 45       # с запасом на 3 паузы по 10 мин
+    timeout-minutes: 60       # 3 паузы по 10 мин + подъём резерва
     steps:
       - uses: actions/checkout@v4
 
       - name: Проверить домашний сервер
         id: check
+        if: ${{ github.event.inputs.force_provision != 'true' }}
         env:
           HOME_HEALTH_URL: ${{ secrets.HOME_HEALTH_URL }}
           RETRIES: ${{ github.event.inputs.retries || '3' }}
@@ -43,10 +52,35 @@ jobs:
       - name: Состояние
         run: echo "home_state=${{ steps.check.outputs.home_state }}"
 
-      # --- Этап 4/5 (заглушки, подключим на следующих шагах) ---
-      # - name: Поднять резерв на Hetzner
-      #   if: steps.check.outputs.home_state == 'HOME_DOWN'
-      #   run: bash scripts/provision.sh
-      # - name: Погасить резерв и вернуться на домашний
+      # --- Этап 4: резерв на Hetzner ---
+      # Предохранитель: подъём включается только когда в репозитории заведена
+      # переменная FAILOVER_ENABLED=true (Settings → Variables). Пока её нет,
+      # сторож работает как раньше — только детект и уведомление.
+      - name: Поднять резерв на Hetzner
+        id: provision
+        if: >-
+          ${{ vars.FAILOVER_ENABLED == 'true' &&
+              (steps.check.outputs.home_state == 'HOME_DOWN' ||
+               github.event.inputs.force_provision == 'true') }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          BACKUP_BRANCH: ${{ vars.BACKUP_BRANCH || 'main' }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          REMOTE_ACCESS_TOKEN: ${{ secrets.REMOTE_ACCESS_TOKEN }}
+          SSH_KEY_NAME: ${{ vars.SSH_KEY_NAME }}
+          SERVER_TYPE: ${{ vars.SERVER_TYPE }}
+          LOCATIONS: ${{ vars.LOCATIONS || 'fsn1,nbg1,hel1' }}
+          PORT: ${{ vars.PORT || '8778' }}
+          TZ: ${{ vars.TZ || 'Europe/Prague' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: bash scripts/provision.sh
+
+      # --- Этап 5 (заглушка): погасить резерв и вернуться на домашний ---
+      # - name: Погасить резерв
       #   if: steps.check.outputs.home_state == 'HOME_UP'
       #   run: bash scripts/teardown.sh
