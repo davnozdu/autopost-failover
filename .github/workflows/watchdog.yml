@@ -80,6 +80,12 @@ jobs:
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           API_KEY: ${{ secrets.API_KEY }}
           REMOTE_ACCESS_TOKEN: ${{ secrets.REMOTE_ACCESS_TOKEN }}
+          # Страховка на случай, если дома ключ основного LLM задан переменной
+          # окружения и потому отсутствует в бэкапе настроек.
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_KEY: ${{ secrets.LLM_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
           SSH_KEY_NAME: ${{ vars.SSH_KEY_NAME }}
           SIZE_SLUG: ${{ vars.SIZE_SLUG || 's-1vcpu-1gb' }}
           REGIONS: ${{ vars.REGIONS || 'fra1,ams3,lon1' }}
