@@ -205,18 +205,39 @@ home_base="${HOME_HEALTH_URL%/}"; home_base="${home_base%/health}"
 api_get() { curl -fsS --max-time 30 -H "Authorization: Bearer ${API_KEY:-}" "${1}${2}"; }
 b_st=$(api_get "$backup_base" "/api/status" 2>/dev/null)
 h_st=$(api_get "$home_base"   "/api/status" 2>/dev/null)
-b_pub=$(jq -r '.last_published // empty' <<<"$b_st" 2>/dev/null)
-h_pub=$(jq -r '.last_published // empty' <<<"$h_st" 2>/dev/null)
-b_art=$(jq -r '.articles // 0' <<<"$b_st" 2>/dev/null); b_art=${b_art:-0}
-h_art=$(jq -r '.articles // 0' <<<"$h_st" 2>/dev/null); h_art=${h_art:-0}
+# `publications` — счётчик по ВСЕМ каналам (сайты + 24n + соцсети), появился в
+# образе после 2026-07-27; там же `last_published` стал всеканальным. Именно на
+# старой, посайтовой метрике сверка один раз и обманулась: резерв выпустил 9
+# статей 24n и 6 постов соцсетей, по сайтам же не было ничего, обе стороны
+# показали 70 — базу домой не повезли, а публикации потеряли.
+#
+# Если хотя бы одна сторона на старом образе, всеканальные числа сравнивать не с
+# чем: 5050 против 70 — это не «резерв ушёл вперёд», это разные единицы. Тогда
+# откатываемся на посайтовую пару, которую отдают обе версии.
+if [ -n "$(jq -r '.publications // empty' <<<"$b_st" 2>/dev/null)" ] \
+   && [ -n "$(jq -r '.publications // empty' <<<"$h_st" 2>/dev/null)" ]; then
+  metric="все каналы"
+  b_pub=$(jq -r '.last_published // empty' <<<"$b_st" 2>/dev/null)
+  h_pub=$(jq -r '.last_published // empty' <<<"$h_st" 2>/dev/null)
+  b_art=$(jq -r '.publications // 0' <<<"$b_st" 2>/dev/null)
+  h_art=$(jq -r '.publications // 0' <<<"$h_st" 2>/dev/null)
+else
+  metric="только сайты (одна из сторон на старом образе)"
+  b_pub=$(jq -r '.last_site_published // .last_published // empty' <<<"$b_st" 2>/dev/null)
+  h_pub=$(jq -r '.last_site_published // .last_published // empty' <<<"$h_st" 2>/dev/null)
+  b_art=$(jq -r '.articles // 0' <<<"$b_st" 2>/dev/null)
+  h_art=$(jq -r '.articles // 0' <<<"$h_st" 2>/dev/null)
+fi
+b_art=${b_art:-0}; h_art=${h_art:-0}
+log "Сверка ведётся по метрике: ${metric}"
 newer_on_backup="unknown"
 if [ -n "$b_st" ] || [ -n "$h_st" ]; then
-  log "Резерв: статей ${b_art}, последняя публикация ${b_pub:-нет}"
-  log "Дом:    статей ${h_art}, последняя публикация ${h_pub:-нет}"
+  log "Резерв: публикаций ${b_art}, последняя ${b_pub:-нет}"
+  log "Дом:    публикаций ${h_art}, последняя ${h_pub:-нет}"
   # ISO-8601 в UTC сравним лексикографически. Дом ВПЕРЕДИ по публикациям — значит
   # он всё это время работал, и его базу трогать нельзя. Иначе везём домой, если у
-  # резерва свежее публикации ИЛИ больше статей (собранное, но ещё не опубликованное
-  # тоже жалко терять). Всё совпало — везти нечего.
+  # резерва свежее публикации ИЛИ их просто больше (собранное, но ещё не
+  # опубликованное тоже жалко терять). Всё совпало — везти нечего.
   if [ -n "$h_pub" ] && [ -n "$b_pub" ] && [[ "$h_pub" > "$b_pub" ]]; then
     newer_on_backup="no"
   elif [ -n "$b_pub" ] && [ -z "$h_pub" ]; then newer_on_backup="yes"
