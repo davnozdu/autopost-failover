@@ -1,8 +1,8 @@
 name: Watchdog (домашний сервер autopost)
 
 # Ежечасная проверка живости домашнего сервера. При подтверждённом отключении
-# поднимается резервный сервер на Hetzner (Этап 4); при возвращении дома он
-# гасится (Этап 5, ещё не подключён — пока удаляем вручную).
+# поднимается резервный сервер на DigitalOcean (Этап 4); при возвращении дома
+# свежая база уезжает домой, а дроплет удаляется (Этап 5).
 #
 # Живёт в ОТДЕЛЬНОМ ПУБЛИЧНОМ репозитории → минуты Actions бесплатны/безлимитны,
 # исходники autopost не раскрываются, а адрес дома лежит в секрете HOME_HEALTH_URL.
@@ -62,18 +62,18 @@ jobs:
       - name: Состояние
         run: echo "home_state=${{ steps.check.outputs.home_state }}"
 
-      # --- Этап 4: резерв на Hetzner ---
+      # --- Этап 4: резерв на DigitalOcean ---
       # Предохранитель: подъём включается только когда в репозитории заведена
       # переменная FAILOVER_ENABLED=true (Settings → Variables). Пока её нет,
       # сторож работает как раньше — только детект и уведомление.
-      - name: Поднять резерв на Hetzner
+      - name: Поднять резерв на DigitalOcean
         id: provision
         if: >-
           ${{ vars.FAILOVER_ENABLED == 'true' &&
               (steps.check.outputs.home_state == 'HOME_DOWN' ||
                github.event.inputs.force_provision == 'true') }}
         env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
           BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
           BACKUP_BRANCH: ${{ vars.BACKUP_BRANCH || 'main' }}
@@ -81,8 +81,9 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           REMOTE_ACCESS_TOKEN: ${{ secrets.REMOTE_ACCESS_TOKEN }}
           SSH_KEY_NAME: ${{ vars.SSH_KEY_NAME }}
-          SERVER_TYPE: ${{ vars.SERVER_TYPE }}
-          LOCATIONS: ${{ vars.LOCATIONS || 'fsn1,nbg1,hel1' }}
+          SIZE_SLUG: ${{ vars.SIZE_SLUG || 's-1vcpu-1gb' }}
+          REGIONS: ${{ vars.REGIONS || 'fra1,ams3,lon1' }}
+          SWAP_GB: ${{ vars.SWAP_GB || '2' }}
           PORT: ${{ vars.PORT || '8778' }}
           TZ: ${{ vars.TZ || 'Europe/Prague' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
@@ -99,7 +100,7 @@ jobs:
               (steps.check.outputs.home_state == 'HOME_UP' ||
                github.event.inputs.force_teardown == 'true') }}
         env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
           HOME_HEALTH_URL: ${{ secrets.HOME_HEALTH_URL }}
           API_KEY: ${{ secrets.API_KEY }}
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}

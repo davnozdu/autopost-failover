@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Общие помощники для сторожа и управления резервным сервером Hetzner Cloud.
+# Общие помощники для сторожа и управления резервным сервером DigitalOcean.
 # Подключается через `source scripts/lib.sh`. Требует curl и jq (есть на ubuntu-latest).
 
-HCLOUD_API="https://api.hetzner.cloud/v1"
+DO_API="https://api.digitalocean.com/v2"
 
-# Имя/метка резервного сервера. Присутствие такого сервера в проекте Hetzner И ЕСТЬ
-# состояние failover — отдельного хранилища состояния не заводим.
+# Имя и ТЕГ резервного дроплета. Наличие дроплета с этим тегом И ЕСТЬ состояние
+# failover — отдельного хранилища состояния не заводим.
 SERVER_NAME="${SERVER_NAME:-autopost-failover}"
-SERVER_LABEL="role=autopost-failover"
+SERVER_TAG="autopost-failover"
 
 log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] $*"; }
 
@@ -32,30 +32,34 @@ notify() {
     --data-urlencode text="$text" >/dev/null 2>&1 || true
 }
 
-# hc <METHOD> <PATH> [BODY] — запрос к Hetzner Cloud API. Печатает тело ответа.
+# do_api <METHOD> <PATH> [BODY] — запрос к DigitalOcean API. Печатает тело ответа.
 # Ненулевой код возврата при HTTP >= 400 (тело всё равно печатается — там причина).
-hc() {
+# DELETE у DO отвечает 204 с пустым телом — это успех.
+do_api() {
   local method="$1" path="$2" body="${3:-}"
   local out code
   if [ -n "$body" ]; then
     out=$(curl -sS --max-time 60 -w '\n%{http_code}' -X "$method" \
-      -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+      -H "Authorization: Bearer ${DO_TOKEN}" \
       -H "Content-Type: application/json" \
-      -d "$body" "${HCLOUD_API}${path}")
+      -d "$body" "${DO_API}${path}")
   else
     out=$(curl -sS --max-time 60 -w '\n%{http_code}' -X "$method" \
-      -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-      "${HCLOUD_API}${path}")
+      -H "Authorization: Bearer ${DO_TOKEN}" \
+      "${DO_API}${path}")
   fi
   code="${out##*$'\n'}"
   printf '%s' "${out%$'\n'*}"
   [ "$code" -lt 400 ] 2>/dev/null || return 1
 }
 
-# Найти резервный сервер по метке. Печатает JSON сервера или пустую строку.
+# Найти резервный дроплет по тегу. Печатает JSON дроплета или пустую строку.
 find_failover_server() {
-  hc GET "/servers?label_selector=$(printf '%s' "$SERVER_LABEL" | sed 's/=/%3D/')" \
-    | jq -c '.servers[0] // empty'
+  do_api GET "/droplets?tag_name=${SERVER_TAG}&per_page=50" \
+    | jq -c '.droplets[0] // empty'
 }
 
-server_ip() { jq -r '.public_net.ipv4.ip // empty'; }
+# Публичный IPv4 дроплета из его JSON.
+server_ip() {
+  jq -r '[.networks.v4[]? | select(.type=="public") | .ip_address][0] // empty'
+}
