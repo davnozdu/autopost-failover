@@ -63,7 +63,8 @@ log "Подбираю тариф (локации: ${LOCATIONS})…"
 types_json=$(hc GET "/server_types?per_page=100") || die "не удалось получить список тарифов"
 dcs_json=$(hc GET "/datacenters?per_page=100") || die "не удалось получить список ЦОДов"
 
-pick=$(jq -n --argjson t "$types_json" --argjson d "$dcs_json" \
+# ranked — ВСЕ подходящие пары (тариф, локация), от дешёвых к дорогим; pick — первая.
+ranked=$(jq -n --argjson t "$types_json" --argjson d "$dcs_json" \
   --arg locs "$LOCATIONS" --arg force "${SERVER_TYPE:-}" '
   ($locs | split(",") | map(ascii_downcase | ltrimstr(" ") | rtrimstr(" "))) as $order |
   # доступные пары (тариф, ЦОД) по приоритету локаций
@@ -89,8 +90,8 @@ pick=$(jq -n --argjson t "$types_json" --argjson d "$dcs_json" \
   | if ($force | length) > 0 then map(select(.name == $force)) else . end
   | unique_by([.name, .loc])
   | sort_by(.hourly, .rank)
-  | .[0] // empty
 ')
+pick=$(jq -c '.[0] // empty' <<<"$ranked")
 
 [ -n "$pick" ] || die "не нашёл доступного x86-тарифа в локациях ${LOCATIONS}${SERVER_TYPE:+ (запрошен ${SERVER_TYPE})}"
 
@@ -101,7 +102,21 @@ st_month=$(jq -r '.monthly' <<<"$pick")
 log "Выбран тариф: ${st_name} ($(jq -r '.cores' <<<"$pick") vCPU, $(jq -r '.memory' <<<"$pick") ГБ RAM, $(jq -r '.disk' <<<"$pick") ГБ) в ${st_loc} — €${st_hour}/час (€${st_month}/мес)"
 
 if [ "$DRY_RUN" = "1" ]; then
-  summary "🧪 DRY_RUN: создал бы ${st_name} в ${st_loc} за €${st_hour}/час. Ничего не создано."
+  summary "🧪 DRY_RUN: создал бы ${st_name} в ${st_loc} за €${st_hour}/час (€${st_month}/мес). Ничего не создано."
+  # Полная картина цен — чтобы видеть, не отсекли ли мы фильтрами что-то дешёвое.
+  summary "$(printf '\nПодходящие варианты (x86, доступны в %s):' "$LOCATIONS")"
+  summary "$(jq -r '.[:10][] | "  \(.name)\t\(.cores) vCPU, \(.memory) ГБ, \(.disk) ГБ\t\(.loc)\t€\(.hourly|tostring[:7])/ч\t€\(.monthly|tostring[:6])/мес"' <<<"$ranked")"
+  summary "$(printf '\nЧто отсеяно фильтрами (для сверки):')"
+  summary "$(jq -n --argjson t "$types_json" --argjson d "$dcs_json" -r '
+    [ $d.datacenters[] | .location.name as $l | .server_types.available[] | {tid:., loc:$l} ] as $avail |
+    [ $t.server_types[] | select(.deprecated != true) | . as $st
+      | ($avail[] | select(.tid == $st.id)) as $a
+      | ($st.prices[] | select(.location == $a.loc)) as $p
+      | {name:$st.name, arch:$st.architecture, cores:$st.cores, memory:$st.memory,
+         loc:$a.loc, hourly:($p.price_hourly.gross|tonumber)} ]
+    | unique_by([.name,.loc]) | sort_by(.hourly)
+    | map(select(.arch != "x86" or .memory < 2))
+    | .[:8][] | "  \(.name)\t\(.arch)\t\(.cores) vCPU, \(.memory) ГБ\t\(.loc)\t€\(.hourly|tostring[:7])/ч  ← \(if .arch != "x86" then "ARM: образ autopost только amd64" else "мало памяти" end)"')"
   emit "provisioned=false"
   exit 0
 fi
