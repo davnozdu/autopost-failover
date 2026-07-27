@@ -26,6 +26,14 @@ on:
         description: "Только показать выбранный тариф и цену, ничего не создавать"
         type: boolean
         default: false
+      force_teardown:
+        description: "Вернуться домой и погасить резерв, не проверяя дом (тест)"
+        type: boolean
+        default: false
+      keep_server:
+        description: "При гашении: всё проверить, но сервер не удалять"
+        type: boolean
+        default: false
 
 concurrency:
   group: watchdog             # не запускать два сторожа одновременно
@@ -40,7 +48,9 @@ jobs:
 
       - name: Проверить домашний сервер
         id: check
-        if: ${{ github.event.inputs.force_provision != 'true' }}
+        if: >-
+          ${{ github.event.inputs.force_provision != 'true' &&
+              github.event.inputs.force_teardown != 'true' }}
         env:
           HOME_HEALTH_URL: ${{ secrets.HOME_HEALTH_URL }}
           RETRIES: ${{ github.event.inputs.retries || '3' }}
@@ -80,7 +90,24 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: bash scripts/provision.sh
 
-      # --- Этап 5 (заглушка): погасить резерв и вернуться на домашний ---
-      # - name: Погасить резерв
-      #   if: steps.check.outputs.home_state == 'HOME_UP'
-      #   run: bash scripts/teardown.sh
+      # --- Этап 5: вернуться домой и погасить резерв ---
+      # Быстрый выход, если резерва нет: скрипт сам это проверяет одним запросом.
+      - name: Вернуться домой и погасить резерв
+        id: teardown
+        if: >-
+          ${{ vars.FAILOVER_ENABLED == 'true' &&
+              (steps.check.outputs.home_state == 'HOME_UP' ||
+               github.event.inputs.force_teardown == 'true') }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          HOME_HEALTH_URL: ${{ secrets.HOME_HEALTH_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          BACKUP_BRANCH: ${{ vars.BACKUP_BRANCH || 'main' }}
+          PORT: ${{ vars.PORT || '8778' }}
+          KEEP_SERVER: ${{ github.event.inputs.keep_server == 'true' && '1' || '0' }}
+          SKIP_HOME_RESTORE: ${{ vars.SKIP_HOME_RESTORE || '0' }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: bash scripts/teardown.sh
