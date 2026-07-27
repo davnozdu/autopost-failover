@@ -56,6 +56,44 @@ api_post() {  # api_post <base-url> <путь с параметрами> → т�
     "${1}${2}"
 }
 
+# ── Полное УДАЛЕНИЕ сервера (не выключение!) ──────────────────────────────
+# В Hetzner выключенный сервер продолжает тарифицироваться — ресурсы за ним
+# зарезервированы. Останавливает счётчик только удаление, поэтому poweroff/shutdown
+# не используем нигде. Отдельно тарифицируется первичный IPv4: он создаётся вместе
+# с сервером и обычно удаляется с ним (auto_delete), но если остался «осиротевшим»
+# — тоже сносим. Функция возвращает 0, только когда сервера ФАКТИЧЕСКИ нет в API.
+delete_server_fully() {
+  local id="$1" gone=0
+  hc DELETE "/servers/${id}" >/dev/null || return 1
+  # удаление асинхронное — дожидаемся исчезновения из API (до ~100 с)
+  for _ in $(seq 1 20); do
+    if ! hc GET "/servers/${id}" >/dev/null 2>&1; then gone=1; break; fi
+    sleep 5
+  done
+  [ "$gone" = "1" ] || return 1
+  log "Сервер ${id} удалён из проекта — тарификация остановлена."
+  # подчистить осиротевшие первичные IP, оставшиеся от нашего сервера
+  local orphans
+  orphans=$(hc GET "/primary_ips?per_page=100" \
+    | jq -r --arg n "$SERVER_NAME" \
+        '.primary_ips[]? | select(.assignee_id == null) | select(.name == $n) | .id' 2>/dev/null)
+  for pid in $orphans; do
+    if hc DELETE "/primary_ips/${pid}" >/dev/null; then
+      log "Удалён осиротевший первичный IP ${pid} (тоже тарифицируется)."
+    else
+      log "ВНИМАНИЕ: не смог удалить первичный IP ${pid} — снесите вручную."
+    fi
+  done
+  # финальная сверка: серверов с нашей меткой не осталось
+  local left
+  left=$(find_failover_server)
+  if [ -n "$left" ]; then
+    log "ВНИМАНИЕ: в проекте всё ещё есть сервер с меткой ${SERVER_LABEL}!"
+    return 1
+  fi
+  return 0
+}
+
 # ── 1. Жив ли резерв вообще ───────────────────────────────────────────────
 backup_base="http://${ip}:${PORT}"
 alive=0
@@ -69,8 +107,11 @@ if [ "$alive" != "1" ]; then
   if [ "${KEEP_SERVER:-0}" = "1" ]; then
     log "KEEP_SERVER=1 — оставляю сервер."; emit "torn_down=false"; exit 0
   fi
-  hc DELETE "/servers/${sid}" >/dev/null || die "не удалось удалить сервер ${sid}"
-  notify "🧹 autopost: дом вернулся. Нерабочий резерв ${ip} удалён (он не отвечал /health)."
+  delete_server_fully "$sid" || {
+    notify "⚠️ autopost: не удалось удалить нерабочий резерв ${ip} (id ${sid}) — снесите вручную, он тарифицируется."
+    die "сервер ${sid} не удалён"
+  }
+  notify "🧹 autopost: дом вернулся. Нерабочий резерв ${ip} удалён (он не отвечал /health). Тарификация остановлена."
   emit "torn_down=true"
   exit 0
 fi
@@ -150,11 +191,11 @@ if [ "${KEEP_SERVER:-0}" = "1" ]; then
   summary "🧪 KEEP_SERVER=1: всё проверено, но сервер ${sid} оставлен."
   emit "torn_down=false"; exit 0
 fi
-hc DELETE "/servers/${sid}" >/dev/null || {
-  notify "⚠️ autopost: не удалось удалить резерв ${ip} (id ${sid}) — удалите вручную, он тарифицируется."
-  die "не удалось удалить сервер ${sid}"
+delete_server_fully "$sid" || {
+  notify "⚠️ autopost: резерв ${ip} (id ${sid}) НЕ удалился полностью — зайдите в консоль Hetzner и снесите вручную, иначе тарификация продолжается."
+  die "сервер ${sid} не удалён полностью"
 }
-summary "🧹 Резерв удалён (id ${sid}, ${ip}). Работаем дома на базе, доехавшей с резерва."
-notify "🟢 autopost: дом вернулся. Свежая БД перенесена с резерва, сервер Hetzner удалён — оплата остановлена."
+summary "🧹 Резерв УДАЛЁН из проекта Hetzner (id ${sid}, ${ip}) — тарификация остановлена. Работаем дома на базе, доехавшей с резерва."
+notify "🟢 autopost: дом вернулся. Свежая БД перенесена с резерва, сервер Hetzner удалён (не выключен) — оплата остановлена."
 emit "torn_down=true"
 exit 0
