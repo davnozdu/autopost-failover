@@ -103,16 +103,19 @@ if [ -n "${BACKUP_REPO:-}" ] && [ -n "${BACKUP_TOKEN:-}" ]; then
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/${BACKUP_REPO}/commits?path=${DB_FILE}&sha=${BACKUP_BRANCH}&per_page=1" \
     | jq -r '.[0].commit.committer.date // empty')
-  if [ -n "$commit_date" ]; then
-    age=$(( $(date -u +%s) - $(date -u -d "$commit_date" +%s 2>/dev/null || echo 0) ))
+  # `date -u -d` — GNU-синтаксис (раннер ubuntu). Если дату разобрать не вышло,
+  # проверку ПРОПУСКАЕМ: считать её «старой» нельзя, иначе резерв не погаснет никогда.
+  ts=$(date -u -d "$commit_date" +%s 2>/dev/null || true)
+  if [ -n "$commit_date" ] && [ -n "$ts" ] && [ "$ts" -gt 0 ] 2>/dev/null; then
+    age=$(( $(date -u +%s) - ts ))
     log "Снимок в репозитории от ${commit_date} (${age}с назад)"
-    if [ "$age" -gt $((FRESH_MINUTES * 60)) ] || [ "$age" -lt 0 ]; then
+    if [ "$age" -gt $((FRESH_MINUTES * 60)) ] || [ "$age" -lt -300 ]; then
       summary "🔴 Снимок БД в ${BACKUP_REPO} старше ${FRESH_MINUTES} мин — резерв НЕ удаляю."
       notify "🔴 autopost: снимок БД в бэкап-репо не обновился. Резерв ${ip} оставлен."
       emit "torn_down=false"; exit 0
     fi
   else
-    log "Не удалось прочитать дату коммита снимка — доверяю ответу резерва"
+    log "Не удалось прочитать/разобрать дату коммита снимка — доверяю ответу резерва"
   fi
 fi
 
