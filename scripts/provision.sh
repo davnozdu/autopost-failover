@@ -128,9 +128,12 @@ if [ "$DRY_RUN" = "1" ]; then
     if ($cx | length) == 0 then "  линейки cx в API нет вообще"
     else
       ($cx[] | "  \(.name): \(.cores) vCPU, \(.memory) ГБ, \(.disk) ГБ, arch=\(.arch), deprecated=\(.dep), от €\(.price|tostring[:7])/ч"),
-      ($d.datacenters[] | . as $dc | ($cx[] |
-        select(($dc.server_types.supported // []) | index(.id)) |
-        "  \($dc.name): \(.name) — \(if (($dc.server_types.available // []) | index(.id)) then "ДОСТУПЕН" else "поддерживается, но НЕ доступен (распродан)" end)"))
+      ($d.datacenters[] | . as $dc
+        | ($dc.server_types.supported // []) as $sup
+        | ($dc.server_types.available // []) as $av
+        | ($cx[] | . as $c
+          | select(($sup | index($c.id)) != null)
+          | "  \($dc.name) (supported=\($sup|length), available=\($av|length)): \($c.name) — \(if ($av | index($c.id)) != null then "ДОСТУПЕН" else "поддерживается, но НЕ доступен (распродан)" end)"))
     end')"
   # Первичный IPv4 тарифицируется ОТДЕЛЬНО от сервера — показываем и его.
   summary "$(hc GET "/pricing" | jq -r '.pricing |
