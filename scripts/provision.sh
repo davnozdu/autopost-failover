@@ -117,6 +117,10 @@ if [ "$DRY_RUN" = "1" ]; then
     | unique_by([.name,.loc]) | sort_by(.hourly)
     | map(select(.arch != "x86" or .memory < 2))
     | .[:8][] | "  \(.name)\t\(.arch)\t\(.cores) vCPU, \(.memory) ГБ\t\(.loc)\t€\(.hourly|tostring[:7])/ч  ← \(if .arch != "x86" then "ARM: образ autopost только amd64" else "мало памяти" end)"')"
+  # Первичный IPv4 тарифицируется ОТДЕЛЬНО от сервера — показываем и его.
+  summary "$(hc GET "/pricing" | jq -r '.pricing |
+    "\nПервичный IPv4: €\(.primary_ips[]? | select(.type=="ipv4") | .prices[0].price_hourly.gross|tostring[:8])/ч",
+    "Исходящий трафик сверх включённого: €\(.traffic.price_per_tb.gross // "—")/ТБ"' 2>/dev/null)"
   emit "provisioned=false"
   exit 0
 fi
